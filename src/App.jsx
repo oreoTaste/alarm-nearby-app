@@ -4,6 +4,7 @@ import { Menu, Crosshair } from 'lucide-react';
 import SearchBox from './components/SearchBox';
 import Sidebar from './components/Sidebar';
 import { sortByNearest } from './utils/geoUtils';
+import { setupBackgroundTracking } from './Background';
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 // 기존 코드 지우고 아래와 같이 수정
@@ -68,6 +69,15 @@ export default function App() {
     }, null, { enableHighAccuracy: true });
     return () => navigator.geolocation.clearWatch(id);
   }, []);
+
+  useEffect(() => {
+    setupBackgroundTracking();
+  }, []);
+
+// 💡 [추가] UI 슬라이더로 변경된 거리를 백그라운드 루프가 읽을 수 있도록 로컬스토리지에 공유
+  useEffect(() => {
+    localStorage.setItem('globalDistance', globalDistance);
+  }, [globalDistance]);
 
   // --- 3. 백엔드에서 초기 데이터 로드 (READ) ---
 // --- 3. 백엔드에서 초기 데이터 로드 (READ) ---
