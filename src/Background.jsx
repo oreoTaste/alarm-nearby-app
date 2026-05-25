@@ -1,10 +1,14 @@
 import { BackgroundGeolocation } from '@capacitor-community/background-geolocation';
-import { LocalNotifications } from '@capacitor/local-notifications';
+import { LocalNotifications } from '@capacitor-community/background-geolocation'; // 간혹 import 패키지 확인 필요
+import { LocalNotifications as InsideNotifications } from '@capacitor/local-notifications';
 import { getDistance } from './utils/geoUtils';
 
-const setupBackgroundTracking = async (locations, globalDistance) => {
+// 기존 코드 지우고 아래와 같이 수정
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:7000/api/locations';
+
+export const setupBackgroundTracking = async (globalDistance) => {
   // 1. 알림 권한 요청
-  await LocalNotifications.requestPermissions();
+  await InsideNotifications.requestPermissions();
 
   // 2. 백그라운드 위치 감시 시작
   BackgroundGeolocation.addWatcher(
@@ -19,27 +23,35 @@ const setupBackgroundTracking = async (locations, globalDistance) => {
       if (error) return console.error(error);
       if (!location) return;
 
-      // 저장된 위치들과의 거리 계산
-      locations.forEach(async (loc) => {
-        if (!loc.isAlertEnabled) return;
+      try {
+        // 📍 백그라운드 구동 시 동기화를 위해 서버에서 최신 목적지 배열을 직접 가져옵니다.
+        const response = await fetch(BACKEND_URL);
+        if (!response.ok) return;
+        const currentLocations = await response.json();
 
-        const distance = getDistance(location.latitude, location.longitude, loc.lat, loc.lng);
+        currentLocations.forEach(async (loc) => {
+          if (!loc.isAlertEnabled) return;
 
-        if (distance <= globalDistance) {
-          // 🔔 조건 충족 시 푸시 알림 전송
-          await LocalNotifications.schedule({
-            notifications: [
-              {
-                title: `📍 목적지 근처 도착!`,
-                body: `${loc.title}까지 약 ${Math.round(distance)}m 남았습니다.`,
-                id: loc.id,
-                schedule: { at: new Date(Date.now() + 1000) },
-                sound: 'default'
-              }
-            ]
-          });
-        }
-      });
+          const distance = getDistance(location.latitude, location.longitude, loc.lat, loc.lng);
+
+          if (distance <= globalDistance) {
+            // 🔔 조건 충족 시 푸시 알림 전송
+            await InsideNotifications.schedule({
+              notifications: [
+                {
+                  title: `📍 목적지 근처 도착!`,
+                  body: `${loc.title}까지 약 ${Math.round(distance)}m 남았습니다.`,
+                  id: loc.id,
+                  schedule: { at: new Date(Date.now() + 1000) },
+                  sound: 'default'
+                }
+              ]
+            });
+          }
+        });
+      } catch (err) {
+        console.error('❌ 백그라운드 통신 에러:', err);
+      }
     }
   );
 };

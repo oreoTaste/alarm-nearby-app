@@ -3,11 +3,12 @@ import { APIProvider, Map, Marker, useMap, Polyline } from '@vis.gl/react-google
 import { Menu, Crosshair } from 'lucide-react';
 import SearchBox from './components/SearchBox';
 import Sidebar from './components/Sidebar';
-import { getDistance, sortByNearest } from './utils/geoUtils';
+import { sortByNearest } from './utils/geoUtils';
 
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+// 기존 코드 지우고 아래와 같이 수정
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:7000/api/locations';
 
-// 📍 [유틸] 검색 시 지도 중심을 해당 위치로 부드럽게 이동시키는 컴포넌트
 function MapHandler({ targetPos }) {
   const map = useMap();
   useEffect(() => {
@@ -19,7 +20,6 @@ function MapHandler({ targetPos }) {
   return null;
 }
 
-// 📍 [컴포넌트] 내 위치 버튼 (화면 오른쪽 아래 고정)
 function CurrentLocationButton({ myPos }) {
   const map = useMap();
   const handleCenter = useCallback(() => {
@@ -43,22 +43,23 @@ function CurrentLocationButton({ myPos }) {
 }
 
 export default function App() {
-  // --- 1. 상태 관리 ---
-  const [locations, setLocations] = useState(() => JSON.parse(localStorage.getItem('geo_locations')) || []);
+  // --- 1. 상태 관리 (초기값은 빈 배열) ---
+  const [locations, setLocations] = useState([]);
   const [globalDistance, setGlobalDistance] = useState(200);
   const [myPos, setMyPos] = useState(null);
   
-  // 검색 결과 임시 마커 좌표 및 제목
   const [searchedPos, setSearchedPos] = useState(null);
   const [searchedTitle, setSearchedTitle] = useState('');
-  
-  // 실제 선택(등록 대기) 중인 좌표
   const [selectedPos, setSelectedPos] = useState(null);
 
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [activeGroup, setActiveGroup] = useState('전체');
   const [isSorted, setIsSorted] = useState(false);
   const [formData, setFormData] = useState({ title: '', note: '', group: '기본' });
+
+// 🔍 [로그 추가] 컴포넌트 로드 시 현재 백엔드 URL 스펙 확인
+  console.log("📢 [프론트엔드 구동] 현재 인식된 백엔드 URL:", BACKEND_URL);
+  console.log("📢 [Vite 환경변수 전체 원본]:", import.meta.env);
 
   // --- 2. 실시간 GPS 추적 ---
   useEffect(() => {
@@ -68,10 +69,24 @@ export default function App() {
     return () => navigator.geolocation.clearWatch(id);
   }, []);
 
-  // --- 3. 로컬 스토리지 동기화 ---
-  useEffect(() => { 
-    localStorage.setItem('geo_locations', JSON.stringify(locations)); 
-  }, [locations]);
+  // --- 3. 백엔드에서 초기 데이터 로드 (READ) ---
+// --- 3. 백엔드에서 초기 데이터 로드 (READ) ---
+  useEffect(() => {
+    const fetchLocations = async () => {
+      console.log(`📡 [요청 시도] GET -> ${BACKEND_URL}`);
+      try {
+        const response = await fetch(BACKEND_URL);
+        console.log("🍏 [요청 성공] 응답 상태코드:", response.status);
+        if (!response.ok) throw new Error(`Network response was not ok (Status: ${response.status})`);
+        const data = await response.json();
+        setLocations(data);
+      } catch (err) {
+        // 🔍 [로그 추가] 에러의 구체적인 메시지와 객체 출력
+        console.error('❌ [요청 실패] GET locations 에러 상세:', err);
+      }
+    };
+    fetchLocations();
+  }, []);
 
   // --- 4. 데이터 가공 (필터링 및 정렬) ---
   const groups = useMemo(() => ['전체', ...new Set(locations.map(l => l.group).filter(Boolean))], [locations]);
@@ -81,34 +96,87 @@ export default function App() {
     return (isSorted && myPos) ? sortByNearest(myPos, list) : list;
   }, [locations, activeGroup, isSorted, myPos]);
 
-  // 최단 경로 선(Polyline) 좌표 생성
   const routePath = useMemo(() => 
     (isSorted && myPos && displayList.length > 0) ? [myPos, ...displayList.map(l => ({ lat: l.lat, lng: l.lng }))] : [], 
   [isSorted, myPos, displayList]);
 
   // --- 5. 이벤트 핸들러 ---
-  
-  // 검색창에서 장소 선택 시
   const handlePlaceSelect = (pos, title) => {
     setSearchedPos(pos);
     setSearchedTitle(title);
-    setIsPanelOpen(false); // 검색 시 일단 사이드바는 닫아둠 (지도 확인 우선)
+    setIsPanelOpen(false);
   };
 
-  // 저장 로직 (등록일시 포함)
-  const handleSaveLocation = () => {
+  // 📍 신규 목적지 저장 (CREATE)
+  const handleSaveLocation = async () => {
     if(!formData.title) return alert('제목을 입력해 주세요.');
-    const newLocation = {
-      ...formData,
-      ...selectedPos,
-      id: Date.now(),
-      regDate: new Date().toLocaleString(), // 2026. 4. 7. 오전 10:24 형식
+    
+    const payload = {
+      title: formData.title,
+      note: formData.note,
+      group: formData.group,
+      lat: selectedPos.lat,
+      lng: selectedPos.lng,
       isAlertEnabled: true
     };
-    setLocations([newLocation, ...locations]);
-    setSelectedPos(null);
-    setSearchedPos(null);
-    // 저장 후 목록을 보여주기 위해 패널 유지 (필요에 따라 닫아도 됨)
+
+    console.log(`📡 [요청 시도] POST -> ${BACKEND_URL} | 데이터:`, payload);
+
+    try {
+      const response = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      console.log("🍏 [요청 성공] 응답 상태코드:", response.status);
+      if (!response.ok) throw new Error('Save failed');
+      
+      const savedLocation = await response.json();
+      // 최신 등록 순으로 상단에 추가
+      setLocations([savedLocation, ...locations]);
+      setSelectedPos(null);
+      setSearchedPos(null);
+    } catch (err) {
+      console.error('❌ [요청 실패] POST location 에러 상세:', err);
+      alert('서버에 저장하지 못했습니다. 백엔드 상태를 확인하세요.');
+    }
+  };
+
+  // 📍 알림 토글 처리 (UPDATE)
+  const handleToggleAlert = async (id, currentStatus) => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isAlertEnabled: !currentStatus })
+      });
+
+      if (!response.ok) throw new Error('Update failed');
+      const updatedLocation = await response.json();
+
+      setLocations(locations.map(l => l.id === id ? updatedLocation : l));
+    } catch (err) {
+      console.error(err);
+      alert('알림 상태 변경에 실패했습니다.');
+    }
+  };
+
+  // 📍 목적지 삭제 처리 (DELETE)
+  const handleDeleteLocation = async (id) => {
+    if (!window.confirm('정말 삭제하시겠습니까?')) return;
+
+    try {
+      const response = await fetch(`${BACKEND_URL}/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) throw new Error('Delete failed');
+      
+      setLocations(locations.filter(l => l.id !== id));
+    } catch (err) {
+      console.error(err);
+      alert('목적지 삭제에 실패했습니다.');
+    }
   };
 
   return (
@@ -116,28 +184,23 @@ export default function App() {
       <APIProvider apiKey={API_KEY}>
         <MapHandler targetPos={searchedPos} />
         
-        {/* 중앙 상단 검색창 */}
         <div className="fixed top-4 inset-x-0 mx-auto z-[40] w-full max-w-[500px] px-16 md:px-0">
           <SearchBox onPlaceSelect={handlePlaceSelect} />
         </div>
 
-        {/* 오른쪽 아래 내 위치 버튼 */}
         <CurrentLocationButton myPos={myPos} />
 
-        {/* 지도 레이어 */}
         <div className="absolute inset-0 z-0">
           <Map 
             defaultCenter={{ lat: 37.5665, lng: 126.9780 }} 
             defaultZoom={14} 
             disableDefaultUI 
             onClick={e => {
-              // 💡 핵심: 사이드바 바깥(지도) 클릭 시 처리
               if (isPanelOpen) {
                 setIsPanelOpen(false);
                 setSelectedPos(null);
                 setSearchedPos(null);
               } else {
-                // 사이드바가 닫혀 있을 때 클릭하면 신규 등록 폼 활성화
                 setSelectedPos({ lat: e.detail.latLng.lat, lng: e.detail.latLng.lng });
                 setFormData({ title: '', note: '', group: '기본' });
                 setIsPanelOpen(true);
@@ -146,36 +209,26 @@ export default function App() {
             }}
             style={{ width: '100%', height: '100%' }}
           >
-            {/* 내 위치 (파란 점) */}
             {myPos && <Marker position={myPos} zIndex={10} icon={{ path: 0, fillColor: '#3b82f6', fillOpacity: 1, strokeWeight: 3, strokeColor: '#ffffff', scale: 8 }} />}
-            
-            {/* 저장된 목적지들 */}
             {displayList.map(l => <Marker key={l.id} position={{ lat: l.lat, lng: l.lng }} />)}
-            
-            {/* 검색된 임시 마커 (클릭 시 저장 폼 활성화) */}
             {searchedPos && (
               <Marker 
                 position={searchedPos} 
                 zIndex={20}
-                onClick={(e) => {
+                onClick={() => {
                   setSelectedPos(searchedPos);
                   setFormData(f => ({ ...f, title: searchedTitle }));
                   setIsPanelOpen(true);
                 }}
               />
             )}
-
-            {/* 현재 선택된(등록 중인) 마커 */}
             {selectedPos && <Marker position={selectedPos} zIndex={5} />}
-
-            {/* 최단 경로 이동 선 */}
             {isSorted && routePath.length > 1 && (
               <Polyline path={routePath} strokeColor="#3b82f6" strokeOpacity={0.8} strokeWeight={4} />
             )}
           </Map>
         </div>
 
-        {/* 메뉴 열기 버튼 (사이드바 닫혀있을 때만 노출) */}
         {!isPanelOpen && (
           <button 
             onClick={() => setIsPanelOpen(true)} 
@@ -185,7 +238,6 @@ export default function App() {
           </button>
         )}
 
-        {/* 사이드바 컴포넌트 */}
         <Sidebar 
           isOpen={isPanelOpen} 
           onClose={() => setIsPanelOpen(false)} 
@@ -200,12 +252,15 @@ export default function App() {
           setFormData={setFormData} 
           onSave={handleSaveLocation} 
           onCancelSelection={() => { setSelectedPos(null); setSearchedPos(null); }} 
-          onToggleAlert={(id) => setLocations(locations.map(l => l.id === id ? {...l, isAlertEnabled: !l.isAlertEnabled} : l))} 
-          onDelete={(id) => setLocations(locations.filter(l => l.id !== id))} 
+          onToggleAlert={(id) => {
+            const target = locations.find(l => l.id === id);
+            if(target) handleToggleAlert(id, target.isAlertEnabled);
+          }} 
+          onDelete={handleDeleteLocation} 
           globalDistance={globalDistance} 
           setGlobalDistance={setGlobalDistance} 
           myPos={myPos}
-	/>
+        />
       </APIProvider>
     </div>
   );
