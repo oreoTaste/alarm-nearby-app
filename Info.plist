@@ -1,0 +1,7 @@
+<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+<string>앱이 꺼져 있어도 설정된 거리 이내에 들어오면 알림을 드리기 위해 위치 권한이 필요합니다.</string>
+<key>UIBackgroundModes</key>
+<array>
+  <string>location</string>
+  <string>remote-notification</string>
+</array>
